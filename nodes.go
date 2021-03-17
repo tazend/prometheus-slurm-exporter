@@ -1,4 +1,5 @@
 /* Copyright 2017 Victor Penso, Matteo Dessalvi
+   Copyright 2021 Toni Harzendorf
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,97 +21,42 @@ import (
 	"io/ioutil"
 	"log"
 	"os/exec"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-type NodesMetrics struct {
+type CPUMetrics struct {
 	alloc float64
-	comp  float64
-	down  float64
-	drain float64
-	err   float64
-	fail  float64
-	idle  float64
-	maint float64
-	mix   float64
-	resv  float64
+	idle float64
+	other float64
+	total float64
+	load float64
 }
 
-func NodesGetMetrics() *NodesMetrics {
-	return ParseNodesMetrics(NodesData())
+type MemoryMetrics struct {
+	alloc float64
+	free float64
+	total float64
 }
 
-func RemoveDuplicates(s []string) []string {
-	m := map[string]bool{}
-	t := []string{}
+//type NodeGPUMetrics struct {
+//
+//}/
 
-	// Walk through the slice 's' and for each value we haven't seen so far, append it to 't'.
-	for _, v := range s {
-		if _, seen := m[v]; !seen {
-			t = append(t, v)
-			m[v] = true
-		}
-	}
-
-	return t
+type NodeMetrics struct {
+	state string
+//	partition string
+	cpus CPUMetrics
+	memory MemoryMetrics
 }
 
-func ParseNodesMetrics(input []byte) *NodesMetrics {
-	var nm NodesMetrics
-	lines := strings.Split(string(input), "\n")
-
-	// Sort and remove all the duplicates from the 'sinfo' output
-	sort.Strings(lines)
-	lines_uniq := RemoveDuplicates(lines)
-
-	for _, line := range lines_uniq {
-		if strings.Contains(line, ",") {
-			split := strings.Split(line, ",")
-			count, _ := strconv.ParseFloat(strings.TrimSpace(split[0]), 64)
-			state := split[1]
-			alloc := regexp.MustCompile(`^alloc`)
-			comp := regexp.MustCompile(`^comp`)
-			down := regexp.MustCompile(`^down`)
-			drain := regexp.MustCompile(`^drain`)
-			fail := regexp.MustCompile(`^fail`)
-			err := regexp.MustCompile(`^err`)
-			idle := regexp.MustCompile(`^idle`)
-			maint := regexp.MustCompile(`^maint`)
-			mix := regexp.MustCompile(`^mix`)
-			resv := regexp.MustCompile(`^res`)
-			switch {
-			case alloc.MatchString(state) == true:
-				nm.alloc += count
-			case comp.MatchString(state) == true:
-				nm.comp += count
-			case down.MatchString(state) == true:
-				nm.down += count
-			case drain.MatchString(state) == true:
-				nm.drain += count
-			case fail.MatchString(state) == true:
-				nm.fail += count
-			case err.MatchString(state) == true:
-				nm.err += count
-			case idle.MatchString(state) == true:
-				nm.idle += count
-			case maint.MatchString(state) == true:
-				nm.maint += count
-			case mix.MatchString(state) == true:
-				nm.mix += count
-			case resv.MatchString(state) == true:
-				nm.resv += count
-			}
-		}
-	}
-	return &nm
+type PartitionMetrics struct {
+	cpus CPUMetrics
+	memory MemoryMetrics
 }
 
-// Execute the sinfo command and return its output
-func NodesData() []byte {
-	cmd := exec.Command("sinfo", "-h", "-o %D,%T")
+func Data() []byte {
+	cmd := exec.Command("sinfo", "-h", "-N",  "-ONodeList:.|,StateCompact:.,CPUsState:.,CPUsLoad:.,AllocMem:.,FreeMem:.,Memory:.,PartitionName:.")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
@@ -125,63 +71,281 @@ func NodesData() []byte {
 	return out
 }
 
+func GetMetrics() (map[string]*NodeMetrics, map[string]*PartitionMetrics) {
+	return ParseMetrics(Data())
+}
+
+/*
+ * Make seperate Metrics for Partition Info and unique Node info
+*/
+
+func NewNodeMetrics(cm CPUMetrics, mm MemoryMetrics, state string) *NodeMetrics {
+
+	node := &NodeMetrics{
+		state,
+		cm,
+		mm,
+	}
+
+	return node
+}
+
+func AddToPartitionMetrics(partition string, partitions map[string]*PartitionMetrics, cm CPUMetrics, mm MemoryMetrics) {
+
+	partitions[partition].cpus.alloc += cm.alloc
+	partitions[partition].cpus.idle += cm.idle
+	partitions[partition].cpus.other += cm.other
+	partitions[partition].cpus.total += cm.total
+	partitions[partition].cpus.load += cm.load
+
+	partitions[partition].memory.alloc += mm.alloc
+	partitions[partition].memory.free += mm.free
+	partitions[partition].memory.total += mm.total
+}
+
+func NewPartitionMetrics(cm CPUMetrics, mm MemoryMetrics) *PartitionMetrics {
+	partition := &PartitionMetrics{
+		cm,
+		mm,
+	}
+
+	return partition
+}
+
+func ParseMetrics(input []byte) (map[string]*NodeMetrics, map[string]*PartitionMetrics) {
+	nodes := make(map[string]*NodeMetrics)
+	partitions := make(map[string]*PartitionMetrics)
+	visited := map[string]bool{}
+
+	lines := strings.Split(string(input), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "|") {
+
+			/* Split sinfo output */
+			split := strings.Split(line, "|")
+
+			cpu_states := split[2]
+			cpus_alloc,_ := strconv.ParseFloat(strings.Split(cpu_states, "/")[0], 64)
+			cpus_idle,_ := strconv.ParseFloat(strings.Split(cpu_states, "/")[1], 64)
+			cpus_other,_ := strconv.ParseFloat(strings.Split(cpu_states, "/")[2], 64)
+			cpus_total,_ := strconv.ParseFloat(strings.Split(cpu_states, "/")[3], 64)
+			cpus_load,_ := strconv.ParseFloat(split[3], 64)
+
+			mem_alloc,_ := strconv.ParseFloat(split[4], 64)
+			mem_free,_ := strconv.ParseFloat(split[5], 64)
+			mem_total,_ := strconv.ParseFloat(split[6], 64)
+
+			/* Initialize Metrics */
+			cm := CPUMetrics{
+				cpus_alloc,
+				cpus_idle,
+				cpus_other,
+				cpus_total,
+				(cpus_load / cpus_total) * 100.0,
+			}
+
+			mm := MemoryMetrics{
+				mem_alloc,
+				mem_free,
+				mem_total,
+			}
+
+			/* Name of Partition */
+			partition := split[7]
+
+			_,pkey := partitions[partition]
+
+			if !pkey {
+				/* Create new Partition specific Metric */
+				partitions[partition] = NewPartitionMetrics(cm, mm)
+			} else {
+				/* Otherwise add new info to existing record */
+				AddToPartitionMetrics(partition, partitions, cm, mm)
+			}
+
+			/* Name of the node */
+			node := split[0]
+			/* State of the node */
+			state := split[1]
+
+			/* From this point on, we are only interested in unique Nodes,
+                         * but sinfo will print each node once per partition, so ignore
+                         * already seen nodes
+                         */
+			if _, seen := visited[node]; !seen {
+				visited[node] = true
+			} else {
+				continue
+			}
+
+			_,nkey := nodes[node]
+
+			if !nkey {
+				/* Create new Node specific Metric */
+				nodes[node] = NewNodeMetrics(cm, mm, state)
+			}
+		}
+	}
+
+	return nodes,partitions
+}
+
 /*
  * Implement the Prometheus Collector interface and feed the
  * Slurm scheduler metrics into it.
  * https://godoc.org/github.com/prometheus/client_golang/prometheus#Collector
  */
 
-func NewNodesCollector() *NodesCollector {
-	return &NodesCollector{
-		alloc: prometheus.NewDesc("slurm_nodes_alloc", "Allocated nodes", nil, nil),
-		comp:  prometheus.NewDesc("slurm_nodes_comp", "Completing nodes", nil, nil),
-		down:  prometheus.NewDesc("slurm_nodes_down", "Down nodes", nil, nil),
-		drain: prometheus.NewDesc("slurm_nodes_drain", "Drain nodes", nil, nil),
-		err:   prometheus.NewDesc("slurm_nodes_err", "Error nodes", nil, nil),
-		fail:  prometheus.NewDesc("slurm_nodes_fail", "Fail nodes", nil, nil),
-		idle:  prometheus.NewDesc("slurm_nodes_idle", "Idle nodes", nil, nil),
-		maint: prometheus.NewDesc("slurm_nodes_maint", "Maint nodes", nil, nil),
-		mix:   prometheus.NewDesc("slurm_nodes_mix", "Mix nodes", nil, nil),
-		resv:  prometheus.NewDesc("slurm_nodes_resv", "Reserved nodes", nil, nil),
-	}
+type NPCollector struct {
+	pc PartitionsCollector
+	nc NodesCollector
 }
 
 type NodesCollector struct {
-	alloc *prometheus.Desc
-	comp  *prometheus.Desc
-	down  *prometheus.Desc
-	drain *prometheus.Desc
-	err   *prometheus.Desc
-	fail  *prometheus.Desc
-	idle  *prometheus.Desc
-	maint *prometheus.Desc
-	mix   *prometheus.Desc
-	resv  *prometheus.Desc
+	states *prometheus.Desc
+	cpus *prometheus.Desc
+	mem *prometheus.Desc
+	load *prometheus.Desc
 }
 
-// Send all metric descriptions
-func (nc *NodesCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- nc.alloc
-	ch <- nc.comp
-	ch <- nc.down
-	ch <- nc.drain
-	ch <- nc.err
-	ch <- nc.fail
-	ch <- nc.idle
-	ch <- nc.maint
-	ch <- nc.mix
-	ch <- nc.resv
+type PartitionsCollector struct {
+	cpus *prometheus.Desc
+	mem *prometheus.Desc
+	load *prometheus.Desc
 }
-func (nc *NodesCollector) Collect(ch chan<- prometheus.Metric) {
-	nm := NodesGetMetrics()
-	ch <- prometheus.MustNewConstMetric(nc.alloc, prometheus.GaugeValue, nm.alloc)
-	ch <- prometheus.MustNewConstMetric(nc.comp, prometheus.GaugeValue, nm.comp)
-	ch <- prometheus.MustNewConstMetric(nc.down, prometheus.GaugeValue, nm.down)
-	ch <- prometheus.MustNewConstMetric(nc.drain, prometheus.GaugeValue, nm.drain)
-	ch <- prometheus.MustNewConstMetric(nc.err, prometheus.GaugeValue, nm.err)
-	ch <- prometheus.MustNewConstMetric(nc.fail, prometheus.GaugeValue, nm.fail)
-	ch <- prometheus.MustNewConstMetric(nc.idle, prometheus.GaugeValue, nm.idle)
-	ch <- prometheus.MustNewConstMetric(nc.maint, prometheus.GaugeValue, nm.maint)
-	ch <- prometheus.MustNewConstMetric(nc.mix, prometheus.GaugeValue, nm.mix)
-	ch <- prometheus.MustNewConstMetric(nc.resv, prometheus.GaugeValue, nm.resv)
+
+func NewNPCollector() *NPCollector {
+	plabelsCPUs := []string{"partition", "state"}
+	plabelsMem := []string{"partition", "state"}
+	plabelsLoad := []string{"partition"}
+
+	nlabelsCPUs := []string{"host", "state"}
+	nlabelsMem := []string{"host", "state"}
+	nlabelsLoad := []string{"host"}
+	nlabelsState := []string{"state"}
+
+	return &NPCollector{
+		PartitionsCollector{
+			load: prometheus.NewDesc("slurm_partition_load",
+				"Total CPU-Load in a Partition", plabelsLoad, nil),
+			cpus: prometheus.NewDesc("slurm_partition_cpus",
+				"CPUs in a Partition", plabelsCPUs, nil),
+			mem: prometheus.NewDesc("slurm_partition_mem",
+				"Memory in a Partition", plabelsMem, nil),
+		},
+		NodesCollector{
+			states: prometheus.NewDesc("slurm_node_states",
+				"States of a Node", nlabelsState, nil),
+			load: prometheus.NewDesc("slurm_node_load",
+				"Load of a Node", nlabelsLoad, nil),
+			cpus: prometheus.NewDesc("slurm_node_cpus",
+				"CPUs on a Node", nlabelsCPUs, nil),
+			mem: prometheus.NewDesc("slurm_node_mem",
+				"Memory on a Node", nlabelsMem, nil),
+		},
+	}
+}
+
+func (np *NPCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- np.nc.states
+	ch <- np.nc.cpus
+	ch <- np.nc.mem
+	ch <- np.nc.load
+
+	ch <- np.pc.cpus
+	ch <- np.pc.mem
+	ch <- np.pc.load
+}
+
+func (np *NPCollector) Collect(ch chan<- prometheus.Metric) {
+	nodes,partitions := GetMetrics()
+	states := make(map[string]float64)
+
+	nc := &np.nc
+	pc := &np.pc
+
+	for node := range nodes {
+
+		/* Count the states */
+		states[nodes[node].state] += 1
+
+		/* Create Node metrics */
+		if nodes[node].cpus.alloc > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, nodes[node].cpus.alloc, node, "allocated")
+		}
+
+		if nodes[node].cpus.idle > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, nodes[node].cpus.idle, node, "idle")
+		}
+
+		if nodes[node].cpus.other > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, nodes[node].cpus.other, node, "other")
+		}
+
+		if nodes[node].cpus.total > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, nodes[node].cpus.total, node, "total")
+		}
+
+		if nodes[node].memory.alloc > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, nodes[node].memory.alloc, node, "allocated")
+		}
+
+		if nodes[node].memory.free > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, nodes[node].memory.free, node, "free")
+		}
+
+		if nodes[node].memory.total > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, nodes[node].memory.total, node, "total")
+		}
+
+		if nodes[node].cpus.load > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.load, prometheus.GaugeValue, nodes[node].cpus.load, node)
+		}
+	}
+
+
+	/* Each State receives it's own metric with respective count */
+
+	for state := range states {
+		if states[state] > 0 {
+			ch <- prometheus.MustNewConstMetric(nc.states, prometheus.GaugeValue, states[state], state)
+		}
+	}
+
+	for p := range partitions {
+
+		/* Create Partition metrics */
+		if partitions[p].cpus.alloc > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.cpus, prometheus.GaugeValue, partitions[p].cpus.alloc, p, "allocated")
+		}
+
+		if partitions[p].cpus.idle > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.cpus, prometheus.GaugeValue, partitions[p].cpus.idle, p, "idle")
+		}
+
+		if partitions[p].cpus.other > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.cpus, prometheus.GaugeValue, partitions[p].cpus.other, p, "other")
+		}
+
+		if partitions[p].cpus.total > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.cpus, prometheus.GaugeValue, partitions[p].cpus.total, p, "total")
+		}
+
+		if partitions[p].memory.alloc > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.mem, prometheus.GaugeValue, partitions[p].memory.alloc, p, "allocated")
+		}
+
+		if partitions[p].memory.free > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.mem, prometheus.GaugeValue, partitions[p].memory.free, p, "free")
+		}
+
+		if partitions[p].memory.total > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.mem, prometheus.GaugeValue, partitions[p].memory.total, p, "total")
+		}
+
+		if partitions[p].cpus.load > 0 {
+			ch <- prometheus.MustNewConstMetric(pc.load, prometheus.GaugeValue, partitions[p].cpus.load, p)
+		}
+	}
+
 }

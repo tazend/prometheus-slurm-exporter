@@ -27,7 +27,7 @@ import (
 func init() {
 	// Metrics have to be registered to be exposed
 	prometheus.MustRegister(NewQueueCollector())          // from queue.go
-	prometheus.MustRegister(NewNPCollector())             // from nodes.go
+	prometheus.MustRegister(NewNodesCollector())          // from nodes.go
 	prometheus.MustRegister(NewSchedulerCollector())      // from scheduler.go
 	prometheus.MustRegister(NewFairShareCollector())      // from sshare.go
 }

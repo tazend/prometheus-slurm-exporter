@@ -45,6 +45,7 @@ type NodeMemoryMetrics struct {
 
 type NodeMetrics struct {
 	state string
+	occurence int
 	cpus NodeCPUMetrics
 	memory NodeMemoryMetrics
 }
@@ -77,6 +78,7 @@ func NewNodeMetrics(cm NodeCPUMetrics, mm NodeMemoryMetrics, state string) *Node
 
 	node := &NodeMetrics{
 		state,
+		1,
 		cm,
 		mm,
 	}
@@ -85,6 +87,7 @@ func NewNodeMetrics(cm NodeCPUMetrics, mm NodeMemoryMetrics, state string) *Node
 }
 
 func NewPartitionMetrics() *PartitionMetrics {
+
 	partition := &PartitionMetrics{
 		make(map[string]*NodeMetrics),
 	}
@@ -95,6 +98,7 @@ func NewPartitionMetrics() *PartitionMetrics {
 func ParsePartitionMetrics(input []byte) map[string]*PartitionMetrics {
 
 	partitions := make(map[string]*PartitionMetrics)
+	visited := map[string]bool{}
 
 	lines := strings.Split(string(input), "\n")
 	for _, line := range lines {
@@ -145,6 +149,13 @@ func ParsePartitionMetrics(input []byte) map[string]*PartitionMetrics {
 			state := split[1]
 
 			partitions[partition].nodes[node] = NewNodeMetrics(cm, mm, state)
+
+			if _, seen := visited[node]; !seen {
+				visited[node] = true
+			} else {
+				partitions[partition].nodes[node].occurence += 1
+				continue
+			}
 		}
 	}
 
@@ -166,19 +177,19 @@ type NodesCollector struct {
 
 func NewNodesCollector() *NodesCollector {
 
-	nlabelsResource := []string{"host", "state", "partition"}
-	nlabelsLoad := []string{"host", "partition"}
-	nlabelsState := []string{"state", "partition"}
+	nlabelsResource := []string{"host", "state", "partition", "occurence"}
+	nlabelsLoad := []string{"host", "partition", "occurence"}
+	nlabelsState := []string{"host", "state", "partition", "occurence"}
 
 	return &NodesCollector{
 		states: prometheus.NewDesc("slurm_node_states",
-			"States of a Node", nlabelsState, nil),
+			"State of a single Node", nlabelsState, nil),
 		load: prometheus.NewDesc("slurm_node_load",
-			"Load of a Node", nlabelsLoad, nil),
+			"Load of a single Node", nlabelsLoad, nil),
 		cpus: prometheus.NewDesc("slurm_node_cpus",
-			"CPUs on a Node", nlabelsResource, nil),
+			"CPUs on a single Node", nlabelsResource, nil),
 		mem: prometheus.NewDesc("slurm_node_mem",
-			"Memory on a Node", nlabelsResource, nil),
+			"Memory on a single Node", nlabelsResource, nil),
 	}
 }
 
@@ -192,49 +203,56 @@ func (nc *NodesCollector) Describe(ch chan<- *prometheus.Desc) {
 func (nc *NodesCollector) Collect(ch chan<- prometheus.Metric) {
 	partitions := GetPartitionMetrics()
 
+	/* Resources per Node (multiple entries per node possible due to a node configured in multiple partitions) */
 	for p := range partitions {
 		for node := range partitions[p].nodes {
+
+			/* This helps summing up the resource values of all unique nodes in the cluster */
+			occ := strconv.Itoa(partitions[p].nodes[node].occurence)
 
 			/* Create Node metrics */
 			if partitions[p].nodes[node].cpus.alloc > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, partitions[p].nodes[node].cpus.alloc,
-					node, "allocated", p)
+					node, "allocated", p, occ)
 			}
 
 			if partitions[p].nodes[node].cpus.idle > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, partitions[p].nodes[node].cpus.idle,
-					node, "idle", p)
+					node, "idle", p, occ)
 			}
 
 			if partitions[p].nodes[node].cpus.other > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, partitions[p].nodes[node].cpus.other,
-					node, "other", p)
+					node, "other", p, occ)
 			}
 
 			if partitions[p].nodes[node].cpus.total > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.cpus, prometheus.GaugeValue, partitions[p].nodes[node].cpus.total,
-					node, "total", p)
+					node, "total", p, occ)
 			}
 
 			if partitions[p].nodes[node].memory.alloc > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, partitions[p].nodes[node].memory.alloc,
-					node, "allocated", p)
+					node, "allocated", p, occ)
 			}
 
 			if partitions[p].nodes[node].memory.free > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, partitions[p].nodes[node].memory.free,
-					node, "free", p)
+					node, "free", p, occ)
 			}
 
 			if partitions[p].nodes[node].memory.total > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.mem, prometheus.GaugeValue, partitions[p].nodes[node].memory.total,
-					node, "total", p)
+					node, "total", p, occ)
 			}
 
 			if partitions[p].nodes[node].cpus.load > 0 {
 				ch <- prometheus.MustNewConstMetric(nc.load, prometheus.GaugeValue, partitions[p].nodes[node].cpus.load,
-					node, p)
+					node, p, occ)
 			}
+
+			ch <- prometheus.MustNewConstMetric(nc.states, prometheus.GaugeValue, 1,
+				node, partitions[p].nodes[node].state, p, occ)
 		}
 	}
 }

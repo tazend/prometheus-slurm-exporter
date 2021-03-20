@@ -147,6 +147,18 @@ func ParseQueueMetrics(input []byte) map[string]*QueueMetrics {
 
 		/* Assign splitted input */
 		partition := split[0]
+
+		/*
+                 * Using tres-alloc is much simpler, because the value for Memory is
+                 * already multiplied with the number of CPUs
+
+                 * When using the value of MIN_MEMORY from squeue, it is not clear if a user
+                 * specified the memory with --mem or --mem-per-cpu. They are
+                 * mutually exclusive and whatever parameter got used, it's value
+                 * is written in the field MIN_MEMORY, but here I wouldn't know
+                 * which one got used, and --mem specifies memory per Node so it
+                 * wouldn't be right to multiply it by the number of CPUs
+                 */
 		tres_alloc := split[1]
 		job_state := split[2]
 		user := split[3]
@@ -162,15 +174,16 @@ func ParseQueueMetrics(input []byte) map[string]*QueueMetrics {
 
 		if strings.Contains(tres_mem_str, "G") {
 			tres_mem,_ = strconv.ParseFloat(strings.Split(tres_mem_str,"G")[0], 64)
-			tres_mem *= 1024.0
+			tres_mem *= 1024.0 * 1024.0 * 1024.0
 		} else if strings.Contains(tres_mem_str, "M") {
 			tres_mem,_ = strconv.ParseFloat(strings.Split(tres_mem_str,"M")[0], 64)
+			tres_mem *= 1024.0 * 1024.0
 		} else if strings.Contains(tres_mem_str, "T") {
 			tres_mem,_ = strconv.ParseFloat(strings.Split(tres_mem_str,"T")[0], 64)
-			tres_mem *= 1024.0 * 1024.0
+			tres_mem *= 1024.0 * 1024.0 * 1024.0 * 1024.0
 		} else if strings.Contains(tres_mem_str, "K") {
 			tres_mem,_ = strconv.ParseFloat(strings.Split(tres_mem_str,"K")[0], 64)
-			tres_mem /= 1024.0
+			tres_mem *= 1024.0
 		}
 
 		/* If partition has no entry yet, create one for the queue */

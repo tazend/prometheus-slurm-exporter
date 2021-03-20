@@ -118,6 +118,11 @@ func ParsePartitionMetrics(input []byte) map[string]*PartitionMetrics {
 			mem_free,_ := strconv.ParseFloat(split[5], 64)
 			mem_total,_ := strconv.ParseFloat(split[6], 64)
 
+			/* Convert to bytes */
+			mem_alloc *= 1024.0 * 1024.0
+			mem_free *= 1024.0 * 1024.0
+			mem_total *= 1024.0 * 1024.0
+
 			/* Initialize Metrics */
 			cm := NodeCPUMetrics{
 				cpus_alloc,
@@ -148,8 +153,26 @@ func ParsePartitionMetrics(input []byte) map[string]*PartitionMetrics {
 			/* State of the node */
 			state := split[1]
 
+			/* Create a new NodeMetric and assign it to the specific partition */
 			partitions[partition].nodes[node] = NewNodeMetrics(cm, mm, state)
 
+			/* When executing the sinfo command, Nodes can appear multiple times
+                         * depending on if they are assigned to multiple partitions
+                         * If a node is in multiple partitions, we won't be able
+                         * to calculate the number of total CPUs/Memory for example
+                         * on the cluster without using the metrics of the node twice, as
+                         * there is no "distinct" function in PromQL to ignore a
+                         * label that appears twice. (as far as I know)
+
+                         * When counting the "occurence", we can just specify occurence="1"
+                         * when calculating cluster-totals, because those nodes that appear
+                         * again will have an occurence > 1
+
+                         * A Node will always have the same metric for things like CPU
+                         * Alloc/idle/other/total, regardless of the partition, so we can
+                         * safely ignore nodes with occurence > 1 when calculating cluster
+                         * totals.
+                         */
 			if _, seen := visited[node]; !seen {
 				visited[node] = true
 			} else {

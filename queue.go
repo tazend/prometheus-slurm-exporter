@@ -50,17 +50,24 @@ func QueueData() []byte {
 type QueueCPUMetrics struct {
 	allocated float64
 	pending float64
+	pending_dep float64
 }
 
 type QueueMemoryMetrics struct {
 	allocated float64
 	pending float64
+	pending_dep float64
 }
 
 type QueueGPUMetrics struct {
 	allocated float64
 	pending float64
 }
+
+/*
+ * These states would also apply to the CPU,Memory or GPU resources,
+ * may change later to reflect that
+ */
 
 type QueueJobMetrics struct {
 	running float64
@@ -95,8 +102,8 @@ type QueueMetrics struct {
 func NewUserMetrics() *UserMetrics {
 
 	/* Initialize Basic Empty Metrics */
-	qcm := QueueCPUMetrics{0, 0}
-	qmm := QueueMemoryMetrics{0, 0}
+	qcm := QueueCPUMetrics{0, 0, 0}
+	qmm := QueueMemoryMetrics{0, 0, 0}
 	qgm := QueueGPUMetrics{0, 0}
 	qjm := QueueJobMetrics{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
@@ -165,6 +172,14 @@ func ParseQueueMetrics(input []byte) map[string]*QueueMetrics {
 		account := split[4]
 		reason := split[5]
 
+		/*
+                 * Ignore jobs were dependecy cannot be satisfied completely for now,
+                 * they must be deleted anyway or altered
+                 */
+		if reason == "DependencyNeverSatisfied" {
+			continue
+		}
+
 		/* Parse allocated TRES */
 		tres_split := strings.Split(tres_alloc, ",")
 		tres_cpu,_ := strconv.ParseFloat(strings.Split(tres_split[0], "=")[1], 64)
@@ -224,6 +239,8 @@ func ParseQueueMetrics(input []byte) map[string]*QueueMetrics {
 
 			if reason == "Dependency" {
 				mjobs.pending_dep += 1
+				mcpus.pending_dep += tres_cpu
+				mmemory.pending_dep += tres_mem
 			}
 
 		case "SUSPENDED":
@@ -369,6 +386,11 @@ func (qc *QueueCollector) Collect(ch chan<- prometheus.Metric) {
 						qm[p].accounts[acc].users[user].cpus.pending, p, acc, "pending", user)
 				}
 
+				if qm[p].accounts[acc].users[user].cpus.pending_dep > 0 {
+					ch <- prometheus.MustNewConstMetric(qc.cpus, prometheus.GaugeValue,
+						qm[p].accounts[acc].users[user].cpus.pending_dep, p, acc, "pending_dep", user)
+				}
+
 				if qm[p].accounts[acc].users[user].cpus.allocated > 0 {
 					ch <- prometheus.MustNewConstMetric(qc.cpus, prometheus.GaugeValue,
 						qm[p].accounts[acc].users[user].cpus.allocated, p, acc, "allocated", user)
@@ -377,6 +399,11 @@ func (qc *QueueCollector) Collect(ch chan<- prometheus.Metric) {
 				if qm[p].accounts[acc].users[user].memory.pending > 0 {
 					ch <- prometheus.MustNewConstMetric(qc.mem, prometheus.GaugeValue,
 						qm[p].accounts[acc].users[user].memory.pending, p, acc, "pending", user)
+				}
+
+				if qm[p].accounts[acc].users[user].memory.pending_dep > 0 {
+					ch <- prometheus.MustNewConstMetric(qc.mem, prometheus.GaugeValue,
+						qm[p].accounts[acc].users[user].memory.pending_dep, p, acc, "pending_dep", user)
 				}
 
 				if qm[p].accounts[acc].users[user].memory.allocated > 0 {

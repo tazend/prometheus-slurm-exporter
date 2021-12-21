@@ -1,5 +1,5 @@
-/* Copyright 2020 Victor Penso
-   Copyright 2021 Toni Harzendorf
+/* Copyright 2017 Victor Penso, Matteo Dessalvi (Original Authors)
+   Copyright 2021 Toni Harzendorf (Modifications)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@ func QueueGetMetrics() map[string]*QueueMetrics {
 }
 
 func QueueData() []byte {
-        cmd := exec.Command("squeue","-a","-r", "-h", "--states=all", "-OPartition:.|,tres-alloc:.,State:.,UserName:.,Account:.,Reason:.")
+        cmd := exec.Command("squeue","-a","-r", "-h", "--states=all", "-OPartition:.|,tres-alloc:.|,State:.|,UserName:.|,Account:.|,Reason:.")
         stdout, err := cmd.StdoutPipe()
         if err != nil {
                 log.Fatal(err)

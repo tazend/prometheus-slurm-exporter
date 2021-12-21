@@ -1,5 +1,5 @@
-/* Copyright 2017 Victor Penso, Matteo Dessalvi
-   Copyright 2021 Toni Harzendorf
+/* Copyright 2017 Victor Penso, Matteo Dessalvi (Original Authors)
+   Copyright 2021 Toni Harzendorf (Modifications)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -55,7 +55,7 @@ type PartitionMetrics struct {
 }
 
 func Data() []byte {
-	cmd := exec.Command("sinfo", "-h", "-N",  "-ONodeList:.|,StateCompact:.,CPUsState:.,CPUsLoad:.,AllocMem:.,FreeMem:.,Memory:.,PartitionName:.")
+	cmd := exec.Command("sinfo", "-h", "-N", "-ONodeList:.|,StateCompact:.|,CPUsState:.|,CPUsLoad:.|,AllocMem:.|,FreeMem:.|,Memory:.|,PartitionName:.")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
